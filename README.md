@@ -7,122 +7,80 @@ Go,マイクロサービス,kubernetes,gRPC,メッシュサービス
 
 で、上の動画に感動したので。セッションを維持したままデプロイできるし、Dockerコンテナをそのままデプロイできる、AutoScalingもやってくれるらしい。AWS EKSもあって良さげ。Opsworksとかもういらんね！ところでEKSのSってなに？
 
-## インストール
+## 環境
+minikubeだとcontrollerのセットアップとかでいろいろ大変だったので、GCPのGKEというサービスを利用してみる
 
-```
-$ brew cask install minikube
+https://console.cloud.google.com/kubernetes/list?project=study-k8s-228114
 
-$ minikube version
-```
+## イメージ図
 
-> ハイパーバイザーが必要になります。Macの場合は、Hyperkit、xhyve、VirtualBox、VMware Fusionいずれかに対応しています。
+### 基本
 
-つまり、minikubeは仮想マシン上で実行されるってこと。dockerはHyperkitで動いているらしい。VirtualBox入っとるし、たぶん問題ない
+<img src="https://www.redhat.com/cms/managed-files/kubernetes-diagram-2-824x437.png">
 
-## クラスタ起動
+### APIサーバーを通してやり取り
 
-```
-$ minikube start
+<img src="https://tech-lab.sios.jp/wp-content/uploads/2018/02/Screen-Shot-2018-02-15-at-8.01.08-1.png">
 
-## ハイパーバイザ指定実行
-$ minikube --vm-driver=virtualbox start
-```
+### 外からはServiceにアクセスして内部で振り分けされる
 
-## クラスタバージョン確認
+<img src="https://cdn-ak.f.st-hatena.com/images/fotolife/o/ornew/20180413/20180413104022.png">
 
-```
-$ kubectl version
-```
+### 
 
-見にくい...
-クライアントとサーバーとあるみたいだけど、一旦放置
+## 用語
 
-```
-## クラスタ詳細情報を表示
-$ kubectl cluster-info
+### API Server
+Restのインタフェースを持つプロセスで、Kubernetesのリソース情報(Pod似に関する情報やCluster IPなど)を管理します。kube-proxyやkubeletなどのプロセスは、このAPI Serverを介して、お互いの情報をやり取りします。
 
-## ダッシュボードアクセス
-$ minikube dashboard
+### etcd
+kubernetesの情報を保存する高信頼分散KVSです。API Serverは、etcdに情報を保存します。他にもflannel(Pod間の通信を実現するVXLAN管理サービス)も利用します。
 
-## クラスタ一覧
-$ kubectl get nodes
-```
+### kubelet
+Podの生成や停止を行います。定期的にAPI Serverに問い合わせて、生成や停止の数やタイミングを決めています。
 
-詳細情報よくわからんけど、ダッシュボードにはアクセスできた！
+### scheduler
+各Nodeの空き状況や状態を監視して、その結果をAPI Serverを通じて、kubeletに伝える役割を持っています。この情報を参考にして、kubeletはコンテナを生成します。例えば、後述しますが、ReplicaSetで複数台スケールするクラスタを作成したときは、このSchedulerが開いているNodeにコンテナを作成するようkubeletに指示します。そして、コンテナは複数のNodeに配置されます。
 
-> Kubernetesはクラスターを管理するマスターとアプリケーション(コンテナ)を実行するノードの2種類があります。Minikubeではマスターのみ起動している状態になります。
+### kube-proxy
+Cluster IPの管理を行います。Cluster IPとは、サービスにアクセスするための代表的なIPアドレスになります。Load BalancerなどのVIPに近いイメージです。このIPアドレスにアクセスすると、そのリクエストは複数のPodに分散されます。kube-proxyのお仕事は、定期的にAPI Server経由でKubernetesのリソース情報にアクセスし、必要に応じてiptableseのルールを作成し、iptablesの機能によって負荷分散を行います。
 
-今はマスターノードしか起動しておらんのやな。じゃあさっきのクライントとサーバーっちゅうのはなんのこっちゃ？
+### コマンド群
+kubectlなどのコマンド群です。ユーザーのインターフェースになります。このコマンドを使って、クラスタを作成したり削除したりとか、Kubernetesにおける全ての管理をします。実際はAPI Serverにリクエストを投げているます。
 
-kubectl-cli→（kubeクライアント）→（kubeサーバー）→各node
+### Pod
+Kubernetesのデプロイの単位になります。Podは複数のコンテナをまとめる論理的な単位です。
 
-こんなイメージ？
+### Service
+論理的なポッドのセットと、それにアクセスするポリシーを定義する抽象的なものです。 これらは、しばしばマイクロサービスとされます。
 
-## アプリケーションデプロイ
+### Deployment
+ローリングアップデートやロールバックといったデプロイ管理の仕組みを提供するものです。
 
-```
-$ kubectl run kubernetes-nginx --image=nginx:1.14.2 --port=8080
+## やってみる
 
-## 確認
-$ kubectl get deployments
-```
++ GKEにアクセス（初期設定済） 
++ kubectl run nginx --image=nginx:1.11.3
++ kubectl get pods
++ kubectl expose deployment nginx --port 80 --type LoadBalancer
++ kubectl get services
++ git clone https://github.com/mihirat/advent.git
++ kubectl apply -f k8s/deployment.yml
++ kubectl apply -f k8s/service.yml
++ kubectl scale deployments/web-server --replicas=4
++ kubectl get pods -o wide
++ kubectl get deployments
++ kubectl set image deployments/web-server go-server=jocatalin/kubernetes-bootcamp
++ kubectl rollout status deployments/web-server
 
-deploy(run)するとPODが作成される
+## 課題
 
-コンテナがPOD内で稼働している状態
-
-## アプリケーションへアクセス
-
-PODはプライベートネットワークで隔離されているので、クラスターの外側からはアクセス不可
-
-kubectlからの操作は必ずapiserverからproxy経由でコンテナへつながっている
-
-（イメージ）
-
-```
-## 受付状態になる
-$ kubectl proxy
-
-## 別のターミナルでアクセス
-### とりあえずバージョン確認
-$ curl http://localhost:8001/version
-
-### apiのいろいろが見れる
-$ curl http://localhost:8001/api/v1
-
-### 稼働しているpodを見て、ハッシュID付きのnameを確認 
-$ curl http://localhost:8001/api/v1/namespaces/default/pods
-（kubectl get pod でも同じものが見れます！）
-$ POD_NAME=hogehoge
-
-### podへアクセス
-$ curl http://localhost:8001/api/v1/namespaces/default/pods/$POD_NAME
-
-### proxyを経由しないとレスポンスが返れない？
-$ curl http://localhost:8001/api/v1/namespaces/default/pods/$POD_NAME/proxy/
-
-### podに入る
-$ kubectl exec -ti $POD_NAME bash
-```
-
-ブラウザからアクセスできんやんけ！！ボケ！！
-
-## Seviceを起動
-
-```
-$ kubectl expose deployment/kubernetes-nginx --type="NodePort" --port 8080
-$ kubectl describe services/kubernetes-nginx
-```
-
-## 停止・削除
-
-```aidl
-$ minikube stop
-$ minikube delete
-```
+- イメージのアップデートはOKだけど、アプリケーション更新はどうするのか
+    - deploymentの中身を変えてrolloutコマンドを実行する
+- 手動スケールアウトでなくAutoスケーリングはどうするのか
+- minikube,EKSを利用する
 
 ## 参考
 
-これをやっただけ
-
-https://dev.classmethod.jp/cloud/kubernetes-tutorial-1/
+https://qiita.com/mihirat/items/ebb0833d50c882398b0f
+https://dev.classmethod.jp/cloud/kubernetes-tutorial-4/
