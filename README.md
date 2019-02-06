@@ -1,86 +1,81 @@
-# Kubernetesのお勉強
+# Kubernetesのお勉強 第2回
 
-https://www.youtube.com/watch?v=ObA1OEVdrQY&feature=youtu.be
+## AWS EKSを使ってみよう
 
-Go,マイクロサービス,kubernetes,gRPC,メッシュサービス
-このあたりのワードを中心に勉強する
+- 2018年12月20日 に東京リージョンでもサービス利用可能となった
+- それまでは北部バージニアとオレゴン、他2つくらいだった
+- 東京では出たばっかりのサービスなので、使える機能やリファレンスがまだ整備しきれてない様子
+- お金がかかる EKSクラスタ → 0.1USD/h（コンテナを稼働させるEC2インスタンスはまた別途料金が発生）
+- ちなみにGCPのk8sサービスであるGKEは無料
 
-で、上の動画に感動したので。セッションを維持したままデプロイできるし、Dockerコンテナをそのままデプロイできる、AutoScalingもやってくれるらしい。AWS EKSもあって良さげ。Opsworksとかもういらんね！ところでEKSのSってなに？
+### 参考サイト
 
-## 環境
-minikubeだとcontrollerのセットアップとかでいろいろ大変だったので、GCPのGKEというサービスを利用してみる
+https://dev.classmethod.jp/cloud/aws/eks-getting-started/
 
-https://console.cloud.google.com/kubernetes/list?project=study-k8s-228114
+## IAMユーザ、ロール作成
 
-## イメージ図
+- eks読み書き権限ありのユーザを作成
+    - credential設定を済ませCLIで操作できるようにしておく
+- eks用のロールを作成
+    - cluster構成用のポリシーがデフォルトであるのでそれをアタッチしておく（ClusterポリシーとServiceポリシー）
 
-### 基本
+## VPC作成
 
-<img src="https://www.redhat.com/cms/managed-files/kubernetes-diagram-2-824x437.png">
+- CloudFormation + S3にあるEKS用テンプレ で今回デプロイする環境をつくる
 
-### APIサーバーを通してやり取り
+![イメージ](https://onlinehelp.tableau.com/current/server-linux/en-us/Img/ts_aws_three_az.png)
 
-<img src="https://tech-lab.sios.jp/wp-content/uploads/2018/02/Screen-Shot-2018-02-15-at-8.01.08-1.png">
+## ローカル環境セットアップ
 
-### 外からはServiceにアクセスして内部で振り分けされる
+- AWSCLIは前の手順で設定を済ませている前提
+- 認証に `heptio-authenticator-aws` なるものを使うようだが、AWS公式は `aws-iam-authenticator` を使っていた。
 
-<img src="https://cdn-ak.f.st-hatena.com/images/fotolife/o/ornew/20180413/20180413104022.png">
+## クラスタ作成
 
-### 
+- コンソールから手動で作成すると、認証エラーで先に進めなくなるので注意。
+    - クラスタを作成するユーザとcredentialのユーザが一致する必要がある。
+    - そのため、CLIでクラスタを作成する。（コンソールでできるかどうかは試してない）
+    
+```aidl
+# ロールやサブネットは前の手順で作成したものをセット
+$ aws eks create-cluster --name eks-cluster \
+--role-arn arn:aws:iam::XXXXXXXXXXXXXXX:role/eksXXXXXXRole \
+--resources-vpc-config \
+subnetIds=subnet-XXXXXXXXXXXXXXX,subnet-XXXXXXXXXXXXXXX,subnet-XXXXXXXXXXXXXXX,securityGroupIds=sg-XXXXXXXXXXXXXXX
+```
 
-## 用語
+- コンソールで見守ってると、クラスタがActiveになる。
+    - もしくはCLIコマンドでクラスタが作成成功するか確認できる。
 
-### API Server
-Restのインタフェースを持つプロセスで、Kubernetesのリソース情報(Pod似に関する情報やCluster IPなど)を管理します。kube-proxyやkubeletなどのプロセスは、このAPI Serverを介して、お互いの情報をやり取りします。
+![イメージ](https://cdn-ssl-devio-img.classmethod.jp/wp-content/uploads/2018/06/060-960x367.png)
 
-### etcd
-kubernetesの情報を保存する高信頼分散KVSです。API Serverは、etcdに情報を保存します。他にもflannel(Pod間の通信を実現するVXLAN管理サービス)も利用します。
+```aidl
+$ aws eks describe-cluster --name eks-cluster --query cluster.status
+```
 
-### kubelet
-Podの生成や停止を行います。定期的にAPI Serverに問い合わせて、生成や停止の数やタイミングを決めています。
+## kubectl設定
 
-### scheduler
-各Nodeの空き状況や状態を監視して、その結果をAPI Serverを通じて、kubeletに伝える役割を持っています。この情報を参考にして、kubeletはコンテナを生成します。例えば、後述しますが、ReplicaSetで複数台スケールするクラスタを作成したときは、このSchedulerが開いているNodeにコンテナを作成するようkubeletに指示します。そして、コンテナは複数のNodeに配置されます。
+- ローカルからkubernetesのAPI操作を可能にするkubectlの設定をする
+- 認証周りがうまくいってないと以下のようなエラーがでる
+    - 問題解決で参考にしたサイト https://qiita.com/NaokiIshimura/items/60f90d9d925ca2b103bb
 
-### kube-proxy
-Cluster IPの管理を行います。Cluster IPとは、サービスにアクセスするための代表的なIPアドレスになります。Load BalancerなどのVIPに近いイメージです。このIPアドレスにアクセスすると、そのリクエストは複数のPodに分散されます。kube-proxyのお仕事は、定期的にAPI Server経由でKubernetesのリソース情報にアクセスし、必要に応じてiptableseのルールを作成し、iptablesの機能によって負荷分散を行います。
+```aidl
+error: the server doesn't have a resource type "svc"
+```
+## ワーカーノード作成
 
-### コマンド群
-kubectlなどのコマンド群です。ユーザーのインターフェースになります。このコマンドを使って、クラスタを作成したり削除したりとか、Kubernetesにおける全ての管理をします。実際はAPI Serverにリクエストを投げているます。
+- コンテナを稼働させるEC2インスタンスとそれらにアクセスを振り分けるELBを作成する
+- CloudFormation + S3テンプレ
+- 今回EC2が3つ、ELBが1つ
 
-### Pod
-Kubernetesのデプロイの単位になります。Podは複数のコンテナをまとめる論理的な単位です。
+## クラスタを有効にする
 
-### Service
-論理的なポッドのセットと、それにアクセスするポリシーを定義する抽象的なものです。 これらは、しばしばマイクロサービスとされます。
+- ワーカーノードが互いに通信を始める
 
-### Deployment
-ローリングアップデートやロールバックといったデプロイ管理の仕組みを提供するものです。
+## アプリケーションデプロイ
 
-## やってみる
+https://github.com/kubernetes/examples/tree/master/guestbook-go
 
-+ GKEにアクセス（初期設定済） 
-+ kubectl run nginx --image=nginx:1.11.3
-+ kubectl get pods
-+ kubectl expose deployment nginx --port 80 --type LoadBalancer
-+ kubectl get services
-+ git clone https://github.com/mihirat/advent.git
-+ kubectl apply -f k8s/deployment.yml
-+ kubectl apply -f k8s/service.yml
-+ kubectl scale deployments/web-server --replicas=4
-+ kubectl get pods -o wide
-+ kubectl get deployments
-+ kubectl set image deployments/web-server go-server=jocatalin/kubernetes-bootcamp
-+ kubectl rollout status deployments/web-server
+## 出来上がり
 
-## 課題
-
-- イメージのアップデートはOKだけど、アプリケーション更新はどうするのか
-    - deploymentの中身を変えてrolloutコマンドを実行する
-- 手動スケールアウトでなくAutoスケーリングはどうするのか
-- minikube,EKSを利用する
-
-## 参考
-
-https://qiita.com/mihirat/items/ebb0833d50c882398b0f
-https://dev.classmethod.jp/cloud/kubernetes-tutorial-4/
+http://ab39cae792a2e11e9b97312f27349ddf-56620773.us-east-1.elb.amazonaws.com:3000/
